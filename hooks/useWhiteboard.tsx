@@ -1,3 +1,4 @@
+// useWhiteboard.ts
 import { useRef, useState } from 'react';
 
 export type Point = { x: number; y: number };
@@ -8,17 +9,23 @@ export function useWhiteboard() {
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [redoStack, setRedoStack] = useState<Stroke[]>([]);
   const [tool, setTool] = useState<Tool>('draw');
+  const [strokeWidth, setStrokeWidth] = useState<number>(3);
+  const [eraserSize, setEraserSize] = useState<number>(20);
+
+  const strokeWidths = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+  const eraserSizes = [10, 20, 30, 40, 50];
 
   const currentStrokeRef = useRef<Stroke>([]);
   const [currentStrokeForRender, setCurrentStrokeForRender] = useState<Stroke>([]);
+  
+  const eraserStrokeRef = useRef<Stroke>([]);
+  const [eraserStrokeForRender, setEraserStrokeForRender] = useState<Stroke>([]);
 
   const startStroke = (point: Point) => {
     if (tool !== 'draw') return;
     
-    console.log('Starting stroke with point:', point); // Debug log
     currentStrokeRef.current = [point];
     setCurrentStrokeForRender([point]);
-    // Clear redo stack when starting a new stroke
     setRedoStack([]);
   };
 
@@ -33,7 +40,6 @@ export function useWhiteboard() {
     if (tool !== 'draw') return;
     
     const finished = [...currentStrokeRef.current];
-    console.log('Ending stroke with', finished.length, 'points'); // Debug log
     
     if (finished.length > 0) {
       setStrokes((prev) => [...prev, finished]);
@@ -42,45 +48,83 @@ export function useWhiteboard() {
     currentStrokeRef.current = [];
   };
 
+  const startEraserStroke = (point: Point) => {
+    if (tool !== 'eraser') return;
+    
+    eraserStrokeRef.current = [point];
+    setEraserStrokeForRender([point]);
+  };
+
+  const addEraserPoint = (point: Point) => {
+    if (tool !== 'eraser') return;
+    
+    eraserStrokeRef.current.push(point);
+    setEraserStrokeForRender([...eraserStrokeRef.current]);
+  };
+
+  const endEraserStroke = () => {
+    if (tool !== 'eraser') return;
+    
+    setEraserStrokeForRender([]);
+    eraserStrokeRef.current = [];
+  };
+
   const handleEraser = (point: Point) => {
-    console.log('=== ERASER DEBUG ===');
-    console.log('Erasing at point:', point);
-    console.log('Current strokes count:', strokes.length);
+    const eraserRadius = eraserSize / 2;
     
-    // Log all stroke points for debugging
-    strokes.forEach((stroke, index) => {
-      console.log(`Stroke ${index} has ${stroke.length} points:`, stroke.slice(0, 3));
-    });
-    
-    const eraserRadius = 50; // Even larger radius for testing
-    
-    setStrokes((prev) => {
-      console.log('Processing', prev.length, 'strokes for erasing');
+    setStrokes((prevStrokes) => {
+      const newStrokes = [];
       
-      const newStrokes = prev.filter((stroke, strokeIndex) => {
-        // Check if any point in the stroke is within eraser radius
-        let closestDistance = Infinity;
-        const isErased = stroke.some((p, pointIndex) => {
+      prevStrokes.forEach((stroke) => {
+        // Find which points to keep and which to erase
+        const pointsToKeep = [];
+        
+        stroke.forEach((p, index) => {
           const distance = Math.hypot(p.x - point.x, p.y - point.y);
-          if (distance < closestDistance) {
-            closestDistance = distance;
+          if (distance >= eraserRadius) {
+            pointsToKeep.push({ point: p, originalIndex: index });
           }
-          const withinRadius = distance < eraserRadius;
-          
-          if (pointIndex < 3) { // Log first few points
-            console.log(`Stroke ${strokeIndex}, Point ${pointIndex}: (${p.x}, ${p.y}) - Distance: ${distance}, Within radius: ${withinRadius}`);
-          }
-          
-          return withinRadius;
         });
         
-        console.log(`Stroke ${strokeIndex}: Closest distance: ${closestDistance}, Will be erased: ${isErased}`);
-        
-        return !isErased;
+        if (pointsToKeep.length === 0) {
+          // All points erased, remove the whole stroke
+          return;
+        } else if (pointsToKeep.length === stroke.length) {
+          // No points erased, keep the whole stroke
+          newStrokes.push(stroke);
+        } else {
+          // Some points erased, split into continuous segments
+          const segments = [];
+          let currentSegment = [];
+          
+          pointsToKeep.forEach((item, index) => {
+            const { point: p, originalIndex } = item;
+            
+            // If this point is not consecutive to the previous one, start a new segment
+            if (currentSegment.length > 0) {
+              const lastOriginalIndex = pointsToKeep[index - 1].originalIndex;
+              if (originalIndex !== lastOriginalIndex + 1) {
+                // Gap detected, finish current segment and start new one
+                if (currentSegment.length > 1) {
+                  segments.push([...currentSegment]);
+                }
+                currentSegment = [p];
+              } else {
+                currentSegment.push(p);
+              }
+            } else {
+              currentSegment.push(p);
+            }
+          });
+          
+          // Add the last segment if it has enough points
+          if (currentSegment.length > 1) {
+            segments.push(currentSegment);
+          }
+          
+          newStrokes.push(...segments);
+        }
       });
-      
-      console.log(`Eraser result: ${prev.length} -> ${newStrokes.length} strokes`);
-      console.log('===================');
       
       return newStrokes;
     });
@@ -113,22 +157,27 @@ export function useWhiteboard() {
     });
   };
 
-  const setToolWrapper = (newTool: Tool) => {
-    console.log('Setting tool to:', newTool); // Debug log
-    setTool(newTool);
-  };
-
   return {
     strokes,
     currentStroke: currentStrokeForRender,
+    eraserStroke: eraserStrokeForRender,
     startStroke,
     addPoint,
     endStroke,
+    startEraserStroke,
+    addEraserPoint,
+    endEraserStroke,
     undo,
     redo,
     tool,
-    setTool: setToolWrapper,
+    setTool,
     onTouchPoint,
-    setStrokes, // Export for testing
+    setStrokes,
+    strokeWidth,
+    setStrokeWidth,
+    eraserSize,
+    setEraserSize,
+    strokeWidths,
+    eraserSizes,
   };
 }

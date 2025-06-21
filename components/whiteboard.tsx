@@ -1,3 +1,4 @@
+// Whiteboard.js
 import React, { useRef } from 'react';
 import { View, PanResponder, TouchableOpacity, Text, StyleSheet } from 'react-native';
 import Svg, { Path, Circle } from 'react-native-svg';
@@ -7,15 +8,25 @@ export const Whiteboard = () => {
   const {
     strokes,
     currentStroke,
+    eraserStroke,
     startStroke,
     addPoint,
     endStroke,
+    startEraserStroke,
+    addEraserPoint,
+    endEraserStroke,
     undo,
     redo,
     tool,
     setTool,
     onTouchPoint,
-    setStrokes, // Add this for testing
+    setStrokes,
+    strokeWidth,
+    setStrokeWidth,
+    eraserSize,
+    setEraserSize,
+    eraserSizes,
+    strokeWidths,
   } = useWhiteboard();
 
   const [eraserPosition, setEraserPosition] = React.useState(null);
@@ -25,31 +36,32 @@ export const Whiteboard = () => {
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
       onPanResponderGrant: (evt) => {
-        // Try both locationX/Y and pageX/Y for better coordinate handling
+        const { locationX, locationY, pageX, pageY } = evt.nativeEvent;
+        
         const point = {
-          x: evt.nativeEvent.locationX || evt.nativeEvent.pageX,
-          y: evt.nativeEvent.locationY || evt.nativeEvent.pageY
+          x: locationX !== undefined ? locationX : pageX,
+          y: locationY !== undefined ? locationY : pageY
         };
-
-        console.log(`Tool: ${tool}, Grant Point:`, point, 'Strokes count:', strokes.length);
 
         if (tool === 'draw') {
           startStroke(point);
         } else if (tool === 'eraser') {
           setEraserPosition(point);
-          onTouchPoint(point);
+          startEraserStroke(point);
         }
       },
       onPanResponderMove: (evt) => {
+        const { locationX, locationY, pageX, pageY } = evt.nativeEvent;
         const point = {
-          x: evt.nativeEvent.locationX || evt.nativeEvent.pageX,
-          y: evt.nativeEvent.locationY || evt.nativeEvent.pageY
+          x: locationX !== undefined ? locationX : pageX,
+          y: locationY !== undefined ? locationY : pageY
         };
 
         if (tool === 'draw') {
           addPoint(point);
         } else if (tool === 'eraser') {
           setEraserPosition(point);
+          addEraserPoint(point);
           onTouchPoint(point);
         }
       },
@@ -58,46 +70,54 @@ export const Whiteboard = () => {
           endStroke();
         } else if (tool === 'eraser') {
           setEraserPosition(null);
+          endEraserStroke();
         }
       },
     })
   ).current;
 
-  const renderPath = (stroke, index) => {
+  const renderPath = (stroke, index, isEraser = false) => {
     if (stroke.length < 2) return null;
     const d = stroke.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
-    return <Path key={index} d={d} stroke="black" strokeWidth={2} fill="none" />;
+    return (
+      <Path 
+        key={index} 
+        d={d} 
+        stroke={isEraser ? "white" : "black"} 
+        strokeWidth={isEraser ? eraserSize : strokeWidth} 
+        fill="none" 
+      />
+    );
   };
 
   return (
     <View style={styles.container}>
       <View {...panResponder.panHandlers} style={styles.canvas}>
         <Svg style={styles.svg}>
-          {strokes.map(renderPath)}
-          {renderPath(currentStroke, -1)}
+          {strokes.map((stroke, index) => renderPath(stroke, index, false))}
+          {renderPath(currentStroke, -1, false)}
+          {renderPath(eraserStroke, -2, true)}
           
           {/* Eraser indicator */}
           {tool === 'eraser' && eraserPosition && (
             <Circle
               cx={eraserPosition.x}
               cy={eraserPosition.y}
-              r="40"
-              fill="rgba(255,0,0,0.2)"
-              stroke="red"
+              r={eraserSize / 2}
+              fill="rgba(255,255,255,0.8)"
+              stroke="gray"
               strokeWidth="2"
+              strokeDasharray="5,5"
             />
           )}
         </Svg>
       </View>
 
-      {/* Tool Switcher with better styling */}
+      {/* Tool Switcher */}
       <View style={styles.toolContainer}>
         <TouchableOpacity
           style={[styles.toolButton, tool === 'draw' && styles.activeButton]}
-          onPress={() => {
-            console.log('Draw button pressed'); // Debug log
-            setTool('draw');
-          }}
+          onPress={() => setTool('draw')}
         >
           <Text style={[styles.toolText, tool === 'draw' && styles.activeText]}>
             Draw
@@ -106,10 +126,7 @@ export const Whiteboard = () => {
         
         <TouchableOpacity
           style={[styles.toolButton, tool === 'eraser' && styles.activeButton]}
-          onPress={() => {
-            console.log('Eraser button pressed'); // Debug log
-            setTool('eraser');
-          }}
+          onPress={() => setTool('eraser')}
         >
           <Text style={[styles.toolText, tool === 'eraser' && styles.activeText]}>
             Eraser
@@ -117,7 +134,41 @@ export const Whiteboard = () => {
         </TouchableOpacity>
       </View>
 
-      {/* Undo / Redo with better styling */}
+      {/* Stroke Width Selector */}
+      <View style={styles.sizeContainer}>
+        <Text style={styles.sizeLabel}>Stroke:</Text>
+        {strokeWidths.map(width => (
+          <TouchableOpacity
+            key={`stroke-${width}`}
+            style={[
+              styles.sizeButton, 
+              strokeWidth === width && styles.activeSizeButton
+            ]}
+            onPress={() => setStrokeWidth(width)}
+          >
+            <Text style={styles.sizeButtonText}>{width}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {/* Eraser Size Selector */}
+      <View style={styles.sizeContainer}>
+        <Text style={styles.sizeLabel}>Eraser:</Text>
+        {eraserSizes.map(size => (
+          <TouchableOpacity
+            key={`eraser-${size}`}
+            style={[
+              styles.sizeButton, 
+              eraserSize === size && styles.activeSizeButton
+            ]}
+            onPress={() => setEraserSize(size)}
+          >
+            <Text style={styles.sizeButtonText}>{size}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {/* Undo / Redo / Clear */}
       <View style={styles.actionContainer}>
         <TouchableOpacity style={styles.actionButton} onPress={undo}>
           <Text style={styles.actionText}>Undo</Text>
@@ -126,50 +177,22 @@ export const Whiteboard = () => {
         <TouchableOpacity style={styles.actionButton} onPress={redo}>
           <Text style={styles.actionText}>Redo</Text>
         </TouchableOpacity>
-      </View>
-
-      {/* Test buttons */}
-      <View style={styles.testContainer}>
-        <TouchableOpacity 
-          style={styles.testButton} 
-          onPress={() => {
-            // Add a test stroke for debugging
-            const testStroke = [
-              { x: 100, y: 100 },
-              { x: 150, y: 100 },
-              { x: 200, y: 100 }
-            ];
-            console.log('Adding test stroke:', testStroke);
-            setStrokes(prev => [...prev, testStroke]);
-          }}
-        >
-          <Text style={styles.testText}>Add Test Stroke</Text>
-        </TouchableOpacity>
         
         <TouchableOpacity 
-          style={styles.testButton} 
-          onPress={() => {
-            console.log('Manual erase test at (150, 100)');
-            onTouchPoint({ x: 150, y: 100 });
-          }}
+          style={[styles.actionButton, styles.clearButton]} 
+          onPress={() => setStrokes([])}
         >
-          <Text style={styles.testText}>Test Erase</Text>
-        </TouchableOpacity>
-        
-        <TouchableOpacity 
-          style={styles.testButton} 
-          onPress={() => {
-            console.log('Clearing all strokes');
-            setStrokes([]);
-          }}
-        >
-          <Text style={styles.testText}>Clear All</Text>
+          <Text style={styles.actionText}>Clear All</Text>
         </TouchableOpacity>
       </View>
 
       {/* Current tool indicator */}
       <View style={styles.statusContainer}>
-        <Text style={styles.statusText}>Current tool: {tool}</Text>
+        <Text style={styles.statusText}>
+          {tool === 'draw' 
+            ? `Drawing: ${strokeWidth}px` 
+            : `Eraser: ${eraserSize}px`}
+        </Text>
       </View>
     </View>
   );
@@ -213,6 +236,37 @@ const styles = StyleSheet.create({
   activeText: {
     color: '#fff',
   },
+  sizeContainer: {
+    position: 'absolute',
+    top: 120,
+    left: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.8)',
+    padding: 8,
+    borderRadius: 8,
+    gap: 5,
+  },
+  sizeLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginRight: 5,
+  },
+  sizeButton: {
+    width: 30,
+    height: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#e0e0e0',
+    borderRadius: 15,
+  },
+  activeSizeButton: {
+    backgroundColor: '#007AFF',
+  },
+  sizeButtonText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
   actionContainer: {
     position: 'absolute',
     bottom: 80,
@@ -226,32 +280,17 @@ const styles = StyleSheet.create({
     backgroundColor: '#34C759',
     borderRadius: 8,
   },
+  clearButton: {
+    backgroundColor: '#FF3B30',
+  },
   actionText: {
     fontSize: 16,
     fontWeight: '600',
     color: '#fff',
   },
-  testContainer: {
-    position: 'absolute',
-    top: 200,
-    left: 20,
-    flexDirection: 'column',
-    gap: 10,
-  },
-  testButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: '#FF6B6B',
-    borderRadius: 6,
-  },
-  testText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '600',
-  },
   statusContainer: {
     position: 'absolute',
-    top: 120,
+    top: 180,
     left: 20,
     backgroundColor: 'rgba(0,0,0,0.7)',
     paddingHorizontal: 12,
