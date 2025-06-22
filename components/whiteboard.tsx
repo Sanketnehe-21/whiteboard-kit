@@ -1,26 +1,21 @@
-// Whiteboard.js
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import { View, PanResponder, TouchableOpacity, Text, StyleSheet } from 'react-native';
 import Svg, { Path, Circle } from 'react-native-svg';
-import { useWhiteboard } from '../hooks/useWhiteboard';
+import { useWhiteboard, Point } from '../hooks/useWhiteboard'; 
+import { exportAsSVG } from './../utils/exportAsSvg';
 
 export const Whiteboard = () => {
   const {
     strokes,
     currentStroke,
-    eraserStroke,
     startStroke,
     addPoint,
     endStroke,
-    startEraserStroke,
-    addEraserPoint,
-    endEraserStroke,
     undo,
     redo,
+    clearAll,
     tool,
     setTool,
-    onTouchPoint,
-    setStrokes,
     strokeWidth,
     setStrokeWidth,
     eraserSize,
@@ -29,63 +24,56 @@ export const Whiteboard = () => {
     strokeWidths,
   } = useWhiteboard();
 
-  const [eraserPosition, setEraserPosition] = React.useState(null);
+  // --- This state is now only for the visual indicator ---
+  const [indicatorPosition, setIndicatorPosition] = useState<Point | null>(null);
 
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
       onPanResponderGrant: (evt) => {
-        const { locationX, locationY, pageX, pageY } = evt.nativeEvent;
-        
-        const point = {
-          x: locationX !== undefined ? locationX : pageX,
-          y: locationY !== undefined ? locationY : pageY
-        };
+        const { locationX, locationY } = evt.nativeEvent;
+        const point = { x: locationX, y: locationY };
 
-        if (tool === 'draw') {
-          startStroke(point);
-        } else if (tool === 'eraser') {
-          setEraserPosition(point);
-          startEraserStroke(point);
+        // --- SIMPLIFIED: Start a stroke and show the indicator ---
+        startStroke(point);
+        if (tool === 'eraser') {
+          setIndicatorPosition(point);
         }
       },
       onPanResponderMove: (evt) => {
-        const { locationX, locationY, pageX, pageY } = evt.nativeEvent;
-        const point = {
-          x: locationX !== undefined ? locationX : pageX,
-          y: locationY !== undefined ? locationY : pageY
-        };
-
-        if (tool === 'draw') {
-          addPoint(point);
-        } else if (tool === 'eraser') {
-          setEraserPosition(point);
-          addEraserPoint(point);
-          onTouchPoint(point);
+        const { locationX, locationY } = evt.nativeEvent;
+        const point = { x: locationX, y: locationY };
+        
+        // --- SIMPLIFIED: Add a point and move the indicator ---
+        addPoint(point);
+        if (tool === 'eraser') {
+          setIndicatorPosition(point);
         }
       },
       onPanResponderRelease: () => {
-        if (tool === 'draw') {
-          endStroke();
-        } else if (tool === 'eraser') {
-          setEraserPosition(null);
-          endEraserStroke();
-        }
+        // --- SIMPLIFIED: End the stroke and hide the indicator ---
+        endStroke();
+        setIndicatorPosition(null);
       },
     })
   ).current;
 
-  const renderPath = (stroke, index, isEraser = false) => {
-    if (stroke.length < 2) return null;
-    const d = stroke.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
+  // --- UPDATED: renderPath now accepts a Stroke object ---
+  const renderPath = (stroke: any, key: number) => {
+    if (!stroke || stroke.points.length < 2) return null;
+    
+    const d = stroke.points.map((p: Point, i: number) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
+    
     return (
-      <Path 
-        key={index} 
-        d={d} 
-        stroke={isEraser ? "white" : "black"} 
-        strokeWidth={isEraser ? eraserSize : strokeWidth} 
-        fill="none" 
+      <Path
+        key={key}
+        d={d}
+        stroke={stroke.tool === 'eraser' ? "#fff" : "#000"} // Use white for eraser
+        strokeWidth={stroke.strokeWidth}
+        fill="none"
+        strokeLinecap="round"
+        strokeLinejoin="round"
       />
     );
   };
@@ -94,134 +82,120 @@ export const Whiteboard = () => {
     <View style={styles.container}>
       <View {...panResponder.panHandlers} style={styles.canvas}>
         <Svg style={styles.svg}>
-          {strokes.map((stroke, index) => renderPath(stroke, index, false))}
-          {renderPath(currentStroke, -1, false)}
-          {renderPath(eraserStroke, -2, true)}
+          {/* Render committed strokes */}
+          {strokes.map((stroke, index) => renderPath(stroke, index))}
           
+          {/* Render the stroke currently being drawn */}
+          {renderPath(currentStroke, -1)}
+
           {/* Eraser indicator */}
-          {tool === 'eraser' && eraserPosition && (
+          {tool === 'eraser' && indicatorPosition && (
             <Circle
-              cx={eraserPosition.x}
-              cy={eraserPosition.y}
+              cx={indicatorPosition.x}
+              cy={indicatorPosition.y}
               r={eraserSize / 2}
-              fill="rgba(255,255,255,0.8)"
+              fill="rgba(200, 200, 200, 0.5)"
               stroke="gray"
-              strokeWidth="2"
-              strokeDasharray="5,5"
+              strokeWidth="1"
             />
           )}
         </Svg>
       </View>
 
-      {/* Tool Switcher */}
+      {/* --- UI Controls (Largely unchanged, but Clear button is fixed) --- */}
       <View style={styles.toolContainer}>
+        {/* ... (rest of your UI is mostly fine) ... */}
         <TouchableOpacity
           style={[styles.toolButton, tool === 'draw' && styles.activeButton]}
           onPress={() => setTool('draw')}
         >
-          <Text style={[styles.toolText, tool === 'draw' && styles.activeText]}>
-            Draw
-          </Text>
+          <Text style={[styles.toolText, tool === 'draw' && styles.activeText]}>Draw</Text>
         </TouchableOpacity>
-        
         <TouchableOpacity
           style={[styles.toolButton, tool === 'eraser' && styles.activeButton]}
           onPress={() => setTool('eraser')}
         >
-          <Text style={[styles.toolText, tool === 'eraser' && styles.activeText]}>
-            Eraser
-          </Text>
+          <Text style={[styles.toolText, tool === 'eraser' && styles.activeText]}>Eraser</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Stroke Width Selector */}
-      <View style={styles.sizeContainer}>
-        <Text style={styles.sizeLabel}>Stroke:</Text>
-        {strokeWidths.map(width => (
-          <TouchableOpacity
-            key={`stroke-${width}`}
-            style={[
-              styles.sizeButton, 
-              strokeWidth === width && styles.activeSizeButton
-            ]}
-            onPress={() => setStrokeWidth(width)}
-          >
-            <Text style={styles.sizeButtonText}>{width}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
+      {tool === 'draw' && (
+        <View style={styles.sizeContainer}>
+            <Text style={styles.sizeLabel}>Stroke:</Text>
+            {strokeWidths.map(width => (
+                <TouchableOpacity
+                key={`stroke-${width}`}
+                style={[styles.sizeButton, strokeWidth === width && styles.activeSizeButton]}
+                onPress={() => setStrokeWidth(width)}
+                >
+                <View style={{width: width + 4, height: width + 4, borderRadius: (width + 4)/2, backgroundColor: 'black'}}/>
+                </TouchableOpacity>
+            ))}
+        </View>
+      )}
 
-      {/* Eraser Size Selector */}
-      <View style={styles.sizeContainer}>
-        <Text style={styles.sizeLabel}>Eraser:</Text>
-        {eraserSizes.map(size => (
-          <TouchableOpacity
-            key={`eraser-${size}`}
-            style={[
-              styles.sizeButton, 
-              eraserSize === size && styles.activeSizeButton
-            ]}
-            onPress={() => setEraserSize(size)}
-          >
-            <Text style={styles.sizeButtonText}>{size}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
+      {tool === 'eraser' && (
+        <View style={[styles.sizeContainer, {top: 180}]}>
+            <Text style={styles.sizeLabel}>Eraser:</Text>
+            {eraserSizes.map(size => (
+                <TouchableOpacity
+                key={`eraser-${size}`}
+                style={[styles.sizeButton, eraserSize === size && styles.activeSizeButton]}
+                onPress={() => setEraserSize(size)}
+                >
+                <Text style={styles.sizeButtonText}>{size}</Text>
+                </TouchableOpacity>
+            ))}
+        </View>
+      )}
 
-      {/* Undo / Redo / Clear */}
       <View style={styles.actionContainer}>
         <TouchableOpacity style={styles.actionButton} onPress={undo}>
           <Text style={styles.actionText}>Undo</Text>
         </TouchableOpacity>
-        
         <TouchableOpacity style={styles.actionButton} onPress={redo}>
           <Text style={styles.actionText}>Redo</Text>
         </TouchableOpacity>
-        
-        <TouchableOpacity 
-          style={[styles.actionButton, styles.clearButton]} 
-          onPress={() => setStrokes([])}
+        <TouchableOpacity
+          style={[styles.actionButton, styles.clearButton]}
+          onPress={clearAll} // Use the new clearAll function
         >
           <Text style={styles.actionText}>Clear All</Text>
         </TouchableOpacity>
-      </View>
-
-      {/* Current tool indicator */}
-      <View style={styles.statusContainer}>
-        <Text style={styles.statusText}>
-          {tool === 'draw' 
-            ? `Drawing: ${strokeWidth}px` 
-            : `Eraser: ${eraserSize}px`}
-        </Text>
       </View>
     </View>
   );
 };
 
+
+// --- Minor style adjustments for better usability ---
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#fff',
   },
   canvas: {
     flex: 1,
-    backgroundColor: '#fff',
   },
   svg: {
     flex: 1,
   },
   toolContainer: {
     position: 'absolute',
-    top: 60,
-    left: 20,
+    top: 50,
+    left: '50%',
+    transform: [{ translateX: -85 }], // Center the container
     flexDirection: 'row',
     gap: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.8)',
+    padding: 8,
+    borderRadius: 12,
   },
   toolButton: {
     paddingHorizontal: 16,
     paddingVertical: 8,
-    backgroundColor: '#f0f0f0',
     borderRadius: 8,
-    borderWidth: 2,
+    borderWidth: 1,
     borderColor: '#ddd',
   },
   activeButton: {
@@ -238,14 +212,15 @@ const styles = StyleSheet.create({
   },
   sizeContainer: {
     position: 'absolute',
-    top: 120,
+    top: 110,
     left: 20,
+    right: 20,
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'rgba(255,255,255,0.8)',
     padding: 8,
     borderRadius: 8,
-    gap: 5,
+    gap: 10,
   },
   sizeLabel: {
     fontSize: 14,
@@ -259,46 +234,40 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#e0e0e0',
     borderRadius: 15,
+    borderWidth: 2,
+    borderColor: 'transparent',
   },
   activeSizeButton: {
-    backgroundColor: '#007AFF',
+    borderColor: '#007AFF',
   },
   sizeButtonText: {
     fontSize: 12,
     fontWeight: 'bold',
+    color: '#333'
   },
   actionContainer: {
     position: 'absolute',
-    bottom: 80,
-    left: 20,
+    bottom: 40,
+    left: '50%',
+    transform: [{ translateX: -125 }], // Center it
     flexDirection: 'row',
     gap: 15,
   },
   actionButton: {
     paddingHorizontal: 16,
-    paddingVertical: 8,
-    backgroundColor: '#34C759',
+    paddingVertical: 10,
+    backgroundColor: '#f0f0f0',
     borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#ccc'
   },
   clearButton: {
     backgroundColor: '#FF3B30',
+    borderColor: '#FF3B30'
   },
   actionText: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#fff',
-  },
-  statusContainer: {
-    position: 'absolute',
-    top: 180,
-    left: 20,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 6,
-  },
-  statusText: {
-    color: '#fff',
-    fontSize: 14,
+    color: '#333',
   },
 });
