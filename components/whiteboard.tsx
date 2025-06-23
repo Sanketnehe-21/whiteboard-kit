@@ -131,6 +131,9 @@ export const Whiteboard = () => {
             </TouchableOpacity>
           ))}
         </View>
+
+
+
       )}
 
       <View style={styles.actionContainer}>
