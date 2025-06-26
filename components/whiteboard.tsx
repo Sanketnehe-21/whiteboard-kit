@@ -1,14 +1,16 @@
+// Whiteboard.tsx
 import React, { useRef, useState } from 'react'
 import { View, StyleSheet, Text, TouchableOpacity } from 'react-native'
 import Svg, { Path, Circle } from 'react-native-svg'
 import ViewShot, { captureRef } from 'react-native-view-shot'
 import * as MediaLibrary from 'expo-media-library'
-import Animated, { useSharedValue, useAnimatedStyle } from 'react-native-reanimated'
+import Animated, { useSharedValue, useAnimatedStyle, runOnJS } from 'react-native-reanimated'
 import { GestureDetector, Gesture } from 'react-native-gesture-handler'
 import { useWhiteboard, Point } from '../hooks/useWhiteboard'
 
 export const Whiteboard = () => {
   const viewShotRef = useRef(null)
+
   const {
     strokes,
     currentStroke,
@@ -27,43 +29,62 @@ export const Whiteboard = () => {
     strokeWidths,
     eraserSizes,
   } = useWhiteboard()
-  const [indicatorPosition, setIndicatorPosition] = useState<Point | null>(null)
+
+  const [indicatorPosition, setIndicatorPosition] = useState(null)
 
   const scale = useSharedValue(1)
+  const savedScale = useSharedValue(1)
   const translateX = useSharedValue(0)
   const translateY = useSharedValue(0)
+  const savedTranslateX = useSharedValue(0)
+  const savedTranslateY = useSharedValue(0)
 
+  // Gestures
   const drawGesture = Gesture.Pan()
     .maxPointers(1)
     .onStart((e) => {
-      const point = { x: e.x, y: e.y }
-      try {
-        console.log('Draw start:', point)
-        startStroke(point)
-        if (tool === 'eraser') setIndicatorPosition(point)
-      } catch (err) {
-        console.error('Error in start:', err)
+      const point = {
+        x: (e.x - translateX.value) / scale.value,
+        y: (e.y - translateY.value) / scale.value,
       }
+      runOnJS(startStroke)(point)
+      if (tool === 'eraser') runOnJS(setIndicatorPosition)(point)
     })
     .onUpdate((e) => {
-      const point = { x: e.x, y: e.y }
-      try {
-        addPoint(point)
-        if (tool === 'eraser') setIndicatorPosition(point)
-      } catch (err) {
-        console.error('Error in update:', err)
+      const point = {
+        x: (e.x - translateX.value) / scale.value,
+        y: (e.y - translateY.value) / scale.value,
       }
+      runOnJS(addPoint)(point)
+      if (tool === 'eraser') runOnJS(setIndicatorPosition)(point)
     })
     .onEnd(() => {
-      try {
-        endStroke()
-        if (tool === 'eraser') setIndicatorPosition(null)
-      } catch (err) {
-        console.error('Error in end:', err)
-      }
+      runOnJS(endStroke)()
+      if (tool === 'eraser') runOnJS(setIndicatorPosition)(null)
     })
 
-  const composed = Gesture.Exclusive(drawGesture)
+  const pinchGesture = Gesture.Pinch()
+    .onUpdate((e) => {
+      scale.value = savedScale.value * e.scale
+    })
+    .onEnd(() => {
+      savedScale.value = scale.value
+    })
+
+  const panGesture = Gesture.Pan()
+    .minPointers(2)
+    .maxPointers(2)
+    .onUpdate((e) => {
+      translateX.value = savedTranslateX.value + e.translationX
+      translateY.value = savedTranslateY.value + e.translationY
+    })
+    .onEnd(() => {
+      savedTranslateX.value = translateX.value
+      savedTranslateY.value = translateY.value
+    })
+
+  const twoFingerGesture = Gesture.Simultaneous(pinchGesture, panGesture)
+  const composed = Gesture.Race(twoFingerGesture, drawGesture)
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [
@@ -73,15 +94,15 @@ export const Whiteboard = () => {
     ],
   }))
 
-  const renderPath = (stroke: any, key: number) => {
+  const renderPath = (stroke, key) => {
     if (!stroke || stroke.points.length < 2) return null
-    const d = stroke.points.map((p: Point, i: number) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ')
+    const d = stroke.points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ')
     return (
       <Path
         key={key}
         d={d}
         stroke={stroke.tool === 'eraser' ? '#fff' : '#000'}
-        strokeWidth={stroke.strokeWidth}
+        strokeWidth={stroke.strokeWidth / scale.value}
         fill="none"
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -96,15 +117,15 @@ export const Whiteboard = () => {
           <Animated.View style={[styles.canvas, animatedStyle]}>
             <Svg style={styles.svg}>
               {strokes.map(renderPath)}
-              {renderPath(currentStroke, -1)}
+              {currentStroke && renderPath(currentStroke, -1)}
               {tool === 'eraser' && indicatorPosition && (
                 <Circle
                   cx={indicatorPosition.x}
                   cy={indicatorPosition.y}
-                  r={eraserSize / 2}
+                  r={eraserSize / 2 / scale.value}
                   fill="rgba(200,200,200,0.5)"
                   stroke="gray"
-                  strokeWidth="1"
+                  strokeWidth={1 / scale.value}
                 />
               )}
             </Svg>
@@ -168,6 +189,7 @@ export const Whiteboard = () => {
             }
             const asset = await MediaLibrary.createAssetAsync(uri)
             await MediaLibrary.createAlbumAsync('Whiteboard', asset, false)
+            alert("Saved to gallery!")
           } catch (error) {
             console.log('Export error:', error)
           }
