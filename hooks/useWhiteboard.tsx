@@ -1,10 +1,15 @@
-// imports
+// Enhanced useWhiteboard.ts
 import { useRef, useState, useCallback } from 'react'
 
 // types
 export type Point = { x: number; y: number }
 export type Tool = 'draw' | 'eraser'
-export type Stroke = { points: Point[]; tool: Tool; strokeWidth: number }
+export type Stroke = { 
+  points: Point[]; 
+  tool: Tool; 
+  strokeWidth: number; 
+  color?: string 
+}
 
 // hook
 export function useWhiteboard() {
@@ -14,12 +19,14 @@ export function useWhiteboard() {
   const [tool, _setTool] = useState<Tool>('draw')
   const [strokeWidth, _setStrokeWidth] = useState<number>(3)
   const [eraserSize, _setEraserSize] = useState<number>(20)
+  const [color, _setColor] = useState<string>('#000000')
   const [currentStrokeForRender, setCurrentStrokeForRender] = useState<Stroke | null>(null)
 
   // refs
   const toolRef = useRef(tool)
   const strokeWidthRef = useRef(strokeWidth)
   const eraserSizeRef = useRef(eraserSize)
+  const colorRef = useRef(color)
   const currentStrokeRef = useRef<Stroke | null>(null)
 
   // constants
@@ -42,12 +49,18 @@ export function useWhiteboard() {
     _setEraserSize(val)
   }, [])
 
+  const setColor = useCallback((val: string) => {
+    colorRef.current = val
+    _setColor(val)
+  }, [])
+
   // actions
   const startStroke = useCallback((point: Point) => {
     const newStroke: Stroke = {
       points: [point],
       tool: toolRef.current,
       strokeWidth: toolRef.current === 'draw' ? strokeWidthRef.current : eraserSizeRef.current,
+      color: toolRef.current === 'draw' ? colorRef.current : undefined,
     }
     currentStrokeRef.current = newStroke
     setCurrentStrokeForRender({ ...newStroke })
@@ -107,6 +120,8 @@ export function useWhiteboard() {
     setStrokeWidth,
     eraserSize,
     setEraserSize,
+    color,
+    setColor,
     strokeWidths,
     eraserSizes,
   }
