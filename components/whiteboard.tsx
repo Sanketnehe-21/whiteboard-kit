@@ -7,7 +7,6 @@ import {
   Alert,
   ActivityIndicator,
   PanResponder,
-  useWindowDimensions,
 } from 'react-native'
 import { Paths } from 'expo-file-system'
 import * as MediaLibrary from 'expo-media-library'
@@ -39,12 +38,9 @@ const BRUSH_SIZES = [2, 4, 8, 14, 22]
 const ERASER_SIZES = [20, 35, 50, 75]
 
 export const Whiteboard = () => {
-  const { width: screenWidth } = useWindowDimensions()
-  const isCompact = screenWidth < 380
-
   const canvasRef = useRef<WhiteboardCanvasRef>(null)
 
-  const [tool, setTool] = useState<'draw' | 'eraser'>('draw')
+  const [tool, setTool] = useState<'draw' | 'eraser' | 'pan'>('draw')
   const [lineType, setLineType] = useState<LineType>('solid')
   const [color, setColor] = useState<string>('#000000')
   const [strokeWidth, setStrokeWidth] = useState<number>(4)
@@ -56,38 +52,51 @@ export const Whiteboard = () => {
   // Zoom and Pan state
   const [scale, setScale] = useState<number>(1)
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
+  const panRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 })
+  panRef.current = pan
 
   const [canUndo, setCanUndo] = useState<boolean>(false)
   const [canRedo, setCanRedo] = useState<boolean>(false)
   const [isExporting, setIsExporting] = useState<boolean>(false)
 
-  // Zoom PanResponder (for 2-finger pinch and pan)
+  // Smooth Pan & Pinch Gestures
   const initialDistanceRef = useRef<number | null>(null)
   const initialScaleRef = useRef<number>(1)
-  const lastPanRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 })
+  const dragStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 })
 
-  const zoomResponder = useRef(
+  const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: (evt) => evt.nativeEvent.touches.length === 2,
-      onMoveShouldSetPanResponder: (evt) => evt.nativeEvent.touches.length === 2,
+      onStartShouldSetPanResponder: (evt) => {
+        return tool === 'pan' || evt.nativeEvent.touches.length === 2
+      },
+      onMoveShouldSetPanResponder: (evt, gestureState) => {
+        if (tool === 'pan') return true
+        if (evt.nativeEvent.touches.length === 2) return true
+        return false
+      },
       onPanResponderGrant: (evt) => {
         if (evt.nativeEvent.touches.length === 2) {
           const [t1, t2] = evt.nativeEvent.touches
-          const dist = Math.hypot(t1.pageX - t2.pageX, t1.pageY - t2.pageY)
-          initialDistanceRef.current = dist
+          initialDistanceRef.current = Math.hypot(t1.pageX - t2.pageX, t1.pageY - t2.pageY)
           initialScaleRef.current = scale
-          lastPanRef.current = { x: pan.x, y: pan.y }
         }
+        dragStartRef.current = { x: panRef.current.x, y: panRef.current.y }
       },
       onPanResponderMove: (evt, gestureState) => {
+        // Pinch zoom with 2 fingers
         if (evt.nativeEvent.touches.length === 2 && initialDistanceRef.current) {
           const [t1, t2] = evt.nativeEvent.touches
           const currentDist = Math.hypot(t1.pageX - t2.pageX, t1.pageY - t2.pageY)
-          const newScale = Math.min(Math.max(initialScaleRef.current * (currentDist / initialDistanceRef.current), 0.5), 3.5)
-          setScale(newScale)
+          const factor = currentDist / initialDistanceRef.current
+          const targetScale = Math.min(Math.max(initialScaleRef.current * factor, 0.5), 3.5)
+          setScale(Number(targetScale.toFixed(2)))
+        }
+
+        // Pan with 1 finger (in Pan mode) or 2 fingers
+        if (tool === 'pan' || evt.nativeEvent.touches.length === 2) {
           setPan({
-            x: lastPanRef.current.x + gestureState.dx,
-            y: lastPanRef.current.y + gestureState.dy,
+            x: dragStartRef.current.x + gestureState.dx,
+            y: dragStartRef.current.y + gestureState.dy,
           })
         }
       },
@@ -97,8 +106,8 @@ export const Whiteboard = () => {
     })
   ).current
 
-  const handleZoomIn = () => setScale((s) => Math.min(s + 0.25, 3.5))
-  const handleZoomOut = () => setScale((s) => Math.max(s - 0.25, 0.5))
+  const handleZoomIn = () => setScale((s) => Number(Math.min(s + 0.25, 3.5).toFixed(2)))
+  const handleZoomOut = () => setScale((s) => Number(Math.max(s - 0.25, 0.5).toFixed(2)))
   const handleResetZoom = () => {
     setScale(1)
     setPan({ x: 0, y: 0 })
@@ -143,7 +152,7 @@ export const Whiteboard = () => {
 
       const success = await canvasRef.current?.exportToFile(targetPath, 'png', 100)
       if (!success) {
-        Alert.alert('Export Notice', 'Native export saved drawing. Check gallery or logs.')
+        Alert.alert('Export Notice', 'Native export saved drawing.')
       }
 
       const { status } = await MediaLibrary.requestPermissionsAsync()
@@ -152,7 +161,7 @@ export const Whiteboard = () => {
         await MediaLibrary.createAlbumAsync('Whiteboard', asset, false)
         Alert.alert('Exported', 'Saved high-resolution drawing to your gallery! 🖼️')
       } else {
-        Alert.alert('Permission Needed', 'Media library access is required to save photos to gallery.')
+        Alert.alert('Permission Needed', 'Media library access is required to save to gallery.')
       }
     } catch (error: any) {
       console.error('Export error:', error)
@@ -164,8 +173,8 @@ export const Whiteboard = () => {
 
   return (
     <View style={styles.container}>
-      {/* Zoomable Canvas Wrapper */}
-      <View style={styles.canvasContainer} {...zoomResponder.panHandlers}>
+      {/* Zoomable & Pannable Canvas Viewport */}
+      <View style={styles.canvasContainer} {...panResponder.panHandlers}>
         <View
           style={[
             styles.zoomableArea,
@@ -192,7 +201,7 @@ export const Whiteboard = () => {
 
       {/* Top Floating Header & Controls */}
       <View style={styles.topHeader}>
-        {/* Left Tools Group */}
+        {/* Left Tools Group (Draw / Eraser / Hand-Pan / Styles) */}
         <View style={styles.dockBar}>
           <TouchableOpacity
             style={[styles.toolBtn, tool === 'draw' && styles.toolBtnActive]}
@@ -212,6 +221,16 @@ export const Whiteboard = () => {
             }}
           >
             <Text style={styles.toolIcon}>🧹</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.toolBtn, tool === 'pan' && styles.toolBtnActive]}
+            onPress={() => {
+              setTool('pan')
+              setActiveMenu(null)
+            }}
+          >
+            <Text style={styles.toolIcon}>✋</Text>
           </TouchableOpacity>
 
           {/* Color Trigger */}
@@ -236,7 +255,7 @@ export const Whiteboard = () => {
             </TouchableOpacity>
           )}
 
-          {/* Brush / Eraser Size Trigger */}
+          {/* Size Trigger */}
           <TouchableOpacity
             style={[styles.toolBtn, activeMenu === 'sizes' && styles.toolBtnActive]}
             onPress={() => setActiveMenu((m) => (m === 'sizes' ? null : 'sizes'))}
@@ -336,7 +355,7 @@ export const Whiteboard = () => {
         </View>
       )}
 
-      {/* Floating Submenu: Stroke & Eraser Sizes */}
+      {/* Floating Submenu: Sizes */}
       {activeMenu === 'sizes' && (
         <View style={styles.dropdownModal}>
           <Text style={styles.dropdownTitle}>
@@ -371,7 +390,7 @@ export const Whiteboard = () => {
         </View>
       )}
 
-      {/* Bottom Floating Zoom Controls */}
+      {/* Bottom Floating Zoom Dock */}
       <View style={styles.zoomDock}>
         <TouchableOpacity style={styles.zoomBtn} onPress={handleZoomOut}>
           <Text style={styles.zoomBtnText}>−</Text>
@@ -379,7 +398,9 @@ export const Whiteboard = () => {
 
         <TouchableOpacity style={styles.zoomValueBtn} onPress={handleResetZoom}>
           <Text style={styles.zoomValueText}>{Math.round(scale * 100)}%</Text>
-          {scale !== 1 && <Text style={styles.zoomResetSub}>tap to reset</Text>}
+          {(scale !== 1 || pan.x !== 0 || pan.y !== 0) && (
+            <Text style={styles.zoomResetSub}>reset</Text>
+          )}
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.zoomBtn} onPress={handleZoomIn}>
@@ -403,7 +424,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
 
-  // Top Responsive Floating Header
+  // Top Floating Header
   topHeader: {
     position: 'absolute',
     top: 50,
@@ -430,8 +451,8 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   toolBtn: {
-    width: 40,
-    height: 40,
+    width: 38,
+    height: 38,
     borderRadius: 10,
     justifyContent: 'center',
     alignItems: 'center',
@@ -445,9 +466,9 @@ const styles = StyleSheet.create({
     fontSize: 18,
   },
   swatchBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 2,
@@ -459,16 +480,16 @@ const styles = StyleSheet.create({
     shadowRadius: 2,
   },
   swatchInnerBorder: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
     borderWidth: 1,
     borderColor: 'rgba(0,0,0,0.15)',
   },
 
   actionBtn: {
-    width: 38,
-    height: 38,
+    width: 36,
+    height: 36,
     borderRadius: 10,
     backgroundColor: '#f8fafc',
     justifyContent: 'center',
@@ -478,7 +499,7 @@ const styles = StyleSheet.create({
     opacity: 0.35,
   },
   actionIcon: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '700',
     color: '#1e293b',
   },
@@ -495,7 +516,7 @@ const styles = StyleSheet.create({
   // Floating Dropdown Modals
   dropdownModal: {
     position: 'absolute',
-    top: 110,
+    top: 106,
     left: 20,
     right: 20,
     backgroundColor: 'rgba(255, 255, 255, 0.98)',
@@ -509,7 +530,7 @@ const styles = StyleSheet.create({
     zIndex: 30,
   },
   dropdownTitle: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
     color: '#475569',
     textAlign: 'center',
@@ -546,7 +567,7 @@ const styles = StyleSheet.create({
   lineTypeChip: {
     flex: 1,
     paddingVertical: 10,
-    paddingHorizontal: 8,
+    paddingHorizontal: 6,
     borderRadius: 12,
     backgroundColor: '#f8fafc',
     alignItems: 'center',
@@ -605,12 +626,12 @@ const styles = StyleSheet.create({
     bottom: 24,
     alignSelf: 'center',
     flexDirection: 'row',
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    backgroundColor: 'rgba(255, 255, 255, 0.96)',
     borderRadius: 24,
     paddingHorizontal: 8,
     paddingVertical: 4,
     alignItems: 'center',
-    elevation: 6,
+    elevation: 8,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.15,
@@ -633,7 +654,7 @@ const styles = StyleSheet.create({
     lineHeight: 22,
   },
   zoomValueBtn: {
-    paddingHorizontal: 10,
+    paddingHorizontal: 12,
     paddingVertical: 4,
     alignItems: 'center',
   },
@@ -643,8 +664,9 @@ const styles = StyleSheet.create({
     color: '#0f172a',
   },
   zoomResetSub: {
-    fontSize: 9,
+    fontSize: 8,
     color: '#3b82f6',
-    fontWeight: '600',
+    fontWeight: '700',
+    textTransform: 'uppercase',
   },
 })

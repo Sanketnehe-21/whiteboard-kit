@@ -16,13 +16,10 @@ export type LineType = 'solid' | 'dashed' | 'dotted' | 'highlighter'
 export interface WhiteboardNativeViewProps extends ViewProps {
   strokeColor?: string
   strokeWidth?: number
-  tool?: 'draw' | 'eraser'
+  tool?: 'draw' | 'eraser' | 'pan'
   eraserSize?: number
   lineType?: LineType
   canvasBackgroundColor?: string
-  scale?: number
-  translateX?: number
-  translateY?: number
   onStrokeStart?: () => void
   onStrokeEnd?: () => void
   onHistoryChange?: (event: { nativeEvent: { canUndo: boolean; canRedo: boolean; strokeCount: number } }) => void
@@ -69,7 +66,7 @@ if (isNativeAvailable) {
   }
 }
 
-// Helper to convert array of points into a smooth SVG path d attribute with quadratic beziers
+// Convert points to SVG quadratic bezier curve path
 const pointsToSvgPath = (points: Array<{ x: number; y: number }>): string => {
   if (!points || points.length === 0) return ''
   if (points.length === 1) {
@@ -92,14 +89,19 @@ const pointsToSvgPath = (points: Array<{ x: number; y: number }>): string => {
 export const NativeCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardNativeViewProps>((props, ref) => {
   const nativeRef = useRef<any>(null)
 
-  // In-memory fallback state for Expo Go / preview mode
-  const [fallbackStrokes, setFallbackStrokes] = useState<StrokeRecord[]>([])
-  const [redoStack, setRedoStack] = useState<StrokeRecord[]>([])
-  const [currentPathPoints, setCurrentPathPoints] = useState<Array<{ x: number; y: number }>>([])
+  // Persistent refs to PREVENT STALE CLOSURES (guarantees strokes NEVER vanish!)
+  const strokesRef = useRef<StrokeRecord[]>([])
+  const redoStackRef = useRef<StrokeRecord[]>([])
   const currentPathRef = useRef<Array<{ x: number; y: number }>>([])
 
+  // State to trigger re-renders
+  const [strokesState, setStrokesState] = useState<StrokeRecord[]>([])
+  const [currentPathState, setCurrentPathState] = useState<Array<{ x: number; y: number }>>([])
+
   // Notify history changes safely outside React render/state updater loop
-  const notifyHistory = (strokesCount: number, redosCount: number) => {
+  const notifyHistory = () => {
+    const strokesCount = strokesRef.current.length
+    const redosCount = redoStackRef.current.length
     setTimeout(() => {
       props.onHistoryChange?.({
         nativeEvent: {
@@ -116,34 +118,32 @@ export const NativeCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardNativeView
       if (isNativeAvailable && nativeRef.current?.undo) {
         return nativeRef.current.undo()
       }
-      if (fallbackStrokes.length === 0) return
-      const popped = fallbackStrokes[fallbackStrokes.length - 1]
-      const updated = fallbackStrokes.slice(0, -1)
-      const updatedRedo = [...redoStack, popped]
-      setFallbackStrokes(updated)
-      setRedoStack(updatedRedo)
-      notifyHistory(updated.length, updatedRedo.length)
+      if (strokesRef.current.length === 0) return
+      const popped = strokesRef.current.pop()!
+      redoStackRef.current.push(popped)
+      setStrokesState([...strokesRef.current])
+      notifyHistory()
     },
     redo: async () => {
       if (isNativeAvailable && nativeRef.current?.redo) {
         return nativeRef.current.redo()
       }
-      if (redoStack.length === 0) return
-      const restored = redoStack[redoStack.length - 1]
-      const updatedRedo = redoStack.slice(0, -1)
-      const updated = [...fallbackStrokes, restored]
-      setRedoStack(updatedRedo)
-      setFallbackStrokes(updated)
-      notifyHistory(updated.length, updatedRedo.length)
+      if (redoStackRef.current.length === 0) return
+      const restored = redoStackRef.current.pop()!
+      strokesRef.current.push(restored)
+      setStrokesState([...strokesRef.current])
+      notifyHistory()
     },
     clear: async () => {
       if (isNativeAvailable && nativeRef.current?.clear) {
         return nativeRef.current.clear()
       }
-      setFallbackStrokes([])
-      setRedoStack([])
-      setCurrentPathPoints([])
-      notifyHistory(0, 0)
+      strokesRef.current = []
+      redoStackRef.current = []
+      currentPathRef.current = []
+      setStrokesState([])
+      setCurrentPathState([])
+      notifyHistory()
     },
     exportToBase64: async (format = 'png', quality = 100) => {
       if (isNativeAvailable && nativeRef.current?.exportToBase64) {
@@ -159,41 +159,48 @@ export const NativeCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardNativeView
     },
   }))
 
-  // Continuous line touch responder for preview / Expo Go
+  // Touch responder for continuous drawing
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: (evt) => evt.nativeEvent.touches.length === 1,
-      onMoveShouldSetPanResponder: (evt) => evt.nativeEvent.touches.length === 1,
+      onStartShouldSetPanResponder: (evt) => {
+        return props.tool !== 'pan' && evt.nativeEvent.touches.length === 1
+      },
+      onMoveShouldSetPanResponder: (evt) => {
+        return props.tool !== 'pan' && evt.nativeEvent.touches.length === 1
+      },
       onPanResponderGrant: (evt) => {
-        if (evt.nativeEvent.touches.length > 1) return
+        if (props.tool === 'pan' || evt.nativeEvent.touches.length > 1) return
         const { locationX, locationY } = evt.nativeEvent
         currentPathRef.current = [{ x: locationX, y: locationY }]
-        setCurrentPathPoints([{ x: locationX, y: locationY }])
+        setCurrentPathState([{ x: locationX, y: locationY }])
         props.onStrokeStart?.()
       },
       onPanResponderMove: (evt) => {
-        if (evt.nativeEvent.touches.length > 1) return
+        if (props.tool === 'pan' || evt.nativeEvent.touches.length > 1) return
         const { locationX, locationY } = evt.nativeEvent
         currentPathRef.current.push({ x: locationX, y: locationY })
-        setCurrentPathPoints([...currentPathRef.current])
+        setCurrentPathState([...currentPathRef.current])
       },
       onPanResponderRelease: () => {
+        if (props.tool === 'pan') return
         if (currentPathRef.current.length > 0) {
           const isEraser = props.tool === 'eraser'
           const newStroke: StrokeRecord = {
             path: [...currentPathRef.current],
             color: isEraser ? props.canvasBackgroundColor || '#ffffff' : props.strokeColor || '#000000',
-            width: isEraser ? props.eraserSize || 40 : props.strokeWidth || 6,
+            width: isEraser ? props.eraserSize || 35 : props.strokeWidth || 4,
             isEraser,
             lineType: props.lineType || 'solid',
           }
 
-          const updated = [...fallbackStrokes, newStroke]
-          setFallbackStrokes(updated)
-          setRedoStack([])
+          // Append to persistent ref (NEVER loses previous strokes!)
+          strokesRef.current.push(newStroke)
+          redoStackRef.current = []
+          setStrokesState([...strokesRef.current])
+
           currentPathRef.current = []
-          setCurrentPathPoints([])
-          notifyHistory(updated.length, 0)
+          setCurrentPathState([])
+          notifyHistory()
         }
         props.onStrokeEnd?.()
       },
@@ -207,10 +214,10 @@ export const NativeCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardNativeView
         ref={nativeRef}
         style={[styles.canvas, props.style]}
         strokeColor={props.strokeColor ?? '#000000'}
-        strokeWidth={props.strokeWidth ?? 6}
-        tool={props.tool ?? 'draw'}
+        strokeWidth={props.strokeWidth ?? 4}
+        tool={props.tool === 'pan' ? 'draw' : (props.tool ?? 'draw')}
         lineType={props.lineType ?? 'solid'}
-        eraserSize={props.eraserSize ?? 40}
+        eraserSize={props.eraserSize ?? 35}
         canvasBackgroundColor={props.canvasBackgroundColor ?? '#ffffff'}
         onStrokeStart={props.onStrokeStart}
         onStrokeEnd={props.onStrokeEnd}
@@ -223,7 +230,7 @@ export const NativeCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardNativeView
   return (
     <View style={[styles.canvas, props.style]} {...panResponder.panHandlers}>
       <Svg style={StyleSheet.absoluteFill}>
-        {fallbackStrokes.map((s, idx) => {
+        {strokesState.map((s, idx) => {
           const d = pointsToSvgPath(s.path)
           const isHighlighter = s.lineType === 'highlighter'
           const isDashed = s.lineType === 'dashed'
@@ -244,15 +251,15 @@ export const NativeCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardNativeView
           )
         })}
 
-        {currentPathPoints.length > 0 && (
+        {currentPathState.length > 0 && (
           <Path
-            d={pointsToSvgPath(currentPathPoints)}
+            d={pointsToSvgPath(currentPathState)}
             stroke={props.tool === 'eraser' ? props.canvasBackgroundColor || '#ffffff' : props.strokeColor || '#000000'}
-            strokeWidth={props.tool === 'eraser' ? props.eraserSize || 40 : (props.lineType === 'highlighter' ? (props.strokeWidth || 6) * 2.2 : props.strokeWidth || 6)}
+            strokeWidth={props.tool === 'eraser' ? props.eraserSize || 35 : (props.lineType === 'highlighter' ? (props.strokeWidth || 4) * 2.2 : props.strokeWidth || 4)}
             fill="none"
             strokeLinecap={props.lineType === 'highlighter' ? 'square' : 'round'}
             strokeLinejoin="round"
-            strokeDasharray={props.lineType === 'dashed' ? `${(props.strokeWidth || 6) * 2.5}, ${(props.strokeWidth || 6) * 2}` : props.lineType === 'dotted' ? `1, ${(props.strokeWidth || 6) * 2.5}` : undefined}
+            strokeDasharray={props.lineType === 'dashed' ? `${(props.strokeWidth || 4) * 2.5}, ${(props.strokeWidth || 4) * 2}` : props.lineType === 'dotted' ? `1, ${(props.strokeWidth || 4) * 2.5}` : undefined}
             opacity={props.lineType === 'highlighter' ? 0.45 : 1}
           />
         )}
