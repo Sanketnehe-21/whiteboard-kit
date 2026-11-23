@@ -25,6 +25,10 @@ class WhiteboardModule : Module() {
         view.tool = tool
       }
 
+      Prop("lineType") { view: WhiteboardCanvasView, type: String ->
+        view.lineType = type
+      }
+
       Prop("eraserSize") { view: WhiteboardCanvasView, size: Float ->
         view.eraserSize = size
       }

@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PorterDuff
@@ -21,7 +22,8 @@ data class Stroke(
   val path: Path,
   val color: Int,
   val strokeWidth: Float,
-  val isEraser: Boolean
+  val isEraser: Boolean,
+  val lineType: String = "solid"
 )
 
 class WhiteboardCanvasView(context: Context, appContext: AppContext) : ExpoView(context, appContext) {
@@ -33,11 +35,7 @@ class WhiteboardCanvasView(context: Context, appContext: AppContext) : ExpoView(
   private val redoStack = mutableListOf<Stroke>()
 
   private val currentPath = Path()
-  private val currentPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
-    style = Paint.Style.STROKE
-    strokeJoin = Paint.Join.ROUND
-    strokeCap = Paint.Cap.ROUND
-  }
+  private var currentPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG)
 
   private var mLastX = 0f
   private var mLastY = 0f
@@ -47,6 +45,7 @@ class WhiteboardCanvasView(context: Context, appContext: AppContext) : ExpoView(
   var strokeWidth: Float = 6f
   var tool: String = "draw" // "draw" or "eraser"
   var eraserSize: Float = 40f
+  var lineType: String = "solid" // "solid", "dashed", "dotted", "highlighter"
   var canvasBackgroundColor: Int = Color.WHITE
 
   // Expo Event Dispatchers
@@ -70,7 +69,7 @@ class WhiteboardCanvasView(context: Context, appContext: AppContext) : ExpoView(
     // Replay existing strokes onto new bitmap
     if (strokes.isNotEmpty()) {
       for (stroke in strokes) {
-        val paint = createPaint(stroke.color, stroke.strokeWidth, stroke.isEraser)
+        val paint = createPaint(stroke.color, stroke.strokeWidth, stroke.isEraser, stroke.lineType)
         newCanvas.drawPath(stroke.path, paint)
       }
     }
@@ -106,15 +105,7 @@ class WhiteboardCanvasView(context: Context, appContext: AppContext) : ExpoView(
         parent?.requestDisallowInterceptTouchEvent(true)
         val isEraser = tool == "eraser"
 
-        if (isEraser) {
-          currentPaint.xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
-          currentPaint.color = Color.TRANSPARENT
-          currentPaint.strokeWidth = eraserSize
-        } else {
-          currentPaint.xfermode = null
-          currentPaint.color = strokeColor
-          currentPaint.strokeWidth = strokeWidth
-        }
+        currentPaint = createPaint(strokeColor, strokeWidth, isEraser, lineType)
 
         currentPath.reset()
         currentPath.moveTo(x, y)
@@ -127,7 +118,6 @@ class WhiteboardCanvasView(context: Context, appContext: AppContext) : ExpoView(
       }
 
       MotionEvent.ACTION_MOVE -> {
-        // High-frequency historical touch processing for ultra-smooth Bezier curves
         val historySize = event.historySize
         for (i in 0 until historySize) {
           val hx = event.getHistoricalX(i)
@@ -153,11 +143,7 @@ class WhiteboardCanvasView(context: Context, appContext: AppContext) : ExpoView(
         currentPath.lineTo(mLastX, mLastY)
 
         val isEraser = tool == "eraser"
-        val paint = createPaint(
-          if (isEraser) Color.TRANSPARENT else strokeColor,
-          if (isEraser) eraserSize else strokeWidth,
-          isEraser
-        )
+        val paint = createPaint(strokeColor, strokeWidth, isEraser, lineType)
 
         // Bake stroke into offscreen buffer
         offscreenCanvas?.drawPath(currentPath, paint)
@@ -166,9 +152,10 @@ class WhiteboardCanvasView(context: Context, appContext: AppContext) : ExpoView(
         strokes.add(
           Stroke(
             path = Path(currentPath),
-            color = if (isEraser) Color.TRANSPARENT else strokeColor,
+            color = strokeColor,
             strokeWidth = if (isEraser) eraserSize else strokeWidth,
-            isEraser = isEraser
+            isEraser = isEraser,
+            lineType = lineType
           )
         )
         redoStack.clear()
@@ -185,18 +172,37 @@ class WhiteboardCanvasView(context: Context, appContext: AppContext) : ExpoView(
     return super.onTouchEvent(event)
   }
 
-  private fun createPaint(color: Int, width: Float, isEraser: Boolean): Paint {
+  private fun createPaint(color: Int, width: Float, isEraser: Boolean, type: String = "solid"): Paint {
     return Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
       style = Paint.Style.STROKE
       strokeJoin = Paint.Join.ROUND
       strokeCap = Paint.Cap.ROUND
-      strokeWidth = width
+      strokeWidth = if (isEraser) eraserSize else width
+
       if (isEraser) {
         xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
         this.color = Color.TRANSPARENT
       } else {
         xfermode = null
-        this.color = color
+        when (type) {
+          "highlighter" -> {
+            this.color = Color.argb(105, Color.red(color), Color.green(color), Color.blue(color))
+            this.strokeWidth = width * 2.5f
+            strokeCap = Paint.Cap.SQUARE
+          }
+          "dashed" -> {
+            this.color = color
+            pathEffect = DashPathEffect(floatArrayOf(width * 3f, width * 2.2f), 0f)
+          }
+          "dotted" -> {
+            this.color = color
+            pathEffect = DashPathEffect(floatArrayOf(width * 0.2f, width * 2.5f), 0f)
+          }
+          else -> {
+            this.color = color
+            pathEffect = null
+          }
+        }
       }
     }
   }
@@ -226,7 +232,7 @@ class WhiteboardCanvasView(context: Context, appContext: AppContext) : ExpoView(
     offscreenBitmap?.eraseColor(Color.TRANSPARENT)
     offscreenCanvas?.let { canvas ->
       for (stroke in strokes) {
-        val paint = createPaint(stroke.color, stroke.strokeWidth, stroke.isEraser)
+        val paint = createPaint(stroke.color, stroke.strokeWidth, stroke.isEraser, stroke.lineType)
         canvas.drawPath(stroke.path, paint)
       }
     }
